@@ -11,12 +11,15 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # --- Tools ---
+import os
+
 @tool
 def get_conversion_factor(base_currency: str, target_currency: str) -> float:
     """
     Fetch the currency conversion factor between a base currency and a target currency.
     """
-    url = f"https://v6.exchangerate-api.com/v6/06ff5a588198d533c805437e/pair/{base_currency}/{target_currency}"
+    api_key = os.getenv("EXCHANGE_RATE_API_KEY")
+    url = f"https://v6.exchangerate-api.com/v6/{api_key}/pair/{base_currency}/{target_currency}"
     response = requests.get(url)
     return response.json()
 
