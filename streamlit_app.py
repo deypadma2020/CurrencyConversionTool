@@ -1,39 +1,24 @@
 import streamlit as st
-import json
-from langchain_core.messages import HumanMessage, ToolMessage
-from langchain_groq import ChatGroq
 from langchain_core.tools import tool, InjectedToolArg
 from typing import Annotated
 import requests
+import json
 from dotenv import load_dotenv
-import os
+from langchain_core.messages import HumanMessage, ToolMessage
+from langchain_groq import ChatGroq
 
 # Load environment variables
 load_dotenv()
 
 # --- Tools ---
 @tool
-def get_conversion_factor(base_currency: str, target_currency: str) -> dict:
+def get_conversion_factor(base_currency: str, target_currency: str) -> float:
     """
     Fetch the currency conversion factor between a base currency and a target currency.
-    Returns {"conversion_rate": float, "note": str}.
     """
-    api_key = os.getenv("EXCHANGE_RATE_API_KEY")
-    url = f"https://v6.exchangerate-api.com/v6/{api_key}/pair/{base_currency}/{target_currency}"
-    response = requests.get(url).json()
-
-    if response.get("result") != "success":
-        # fallback dummy rate
-        fallback_rate = 0.013 if base_currency == "INR" and target_currency == "USD" else 1.0
-        return {
-            "conversion_rate": fallback_rate,
-            "note": "Using fallback rate due to API error"
-        }
-
-    return {
-        "conversion_rate": response.get("conversion_rate", 1.0),
-        "note": "Live rate fetched successfully"
-    }
+    url = f"https://v6.exchangerate-api.com/v6/06ff5a588198d533c805437e/pair/{base_currency}/{target_currency}"
+    response = requests.get(url)
+    return response.json()
 
 @tool
 def converter(
@@ -45,62 +30,55 @@ def converter(
     """
     return base_currency_value * conversion_rate
 
-# Bind tools to LLM
+# --- Setup LLM + tools ---
 llm = ChatGroq(model="llama3-70b-8192", temperature=0)
 llm_with_tools = llm.bind_tools([get_conversion_factor, converter])
 
-# --- Currency List for Dropdown ---
-currency_options = [
-    "USD", "EUR", "GBP", "INR", "JPY", "CAD", "AUD", "CHF", "CNY", "SGD", "HKD", "NZD",
-    "SEK", "NOK", "ZAR", "MXN", "BRL", "RUB", "KRW", "AED"
-]
 
-# --- Streamlit UI ---
-st.set_page_config(page_title="Currency Converter AI", layout="centered")
-st.title("💱 Currency Converter using Groq + LangChain")
+# --- Streamlit App ---
+st.set_page_config(page_title="Currency Converter with LangChain + Groq", page_icon="💱")
 
-base_currency = st.selectbox("Select Base Currency:", currency_options, index=currency_options.index("INR"))
-target_currency = st.selectbox("Select Target Currency:", currency_options, index=currency_options.index("USD"))
-amount = st.number_input("Amount to Convert:", min_value=0.01, step=1.0, value=10.0)
+st.title("💱 Currency Converter (LangChain + Groq)")
+
+# Input fields
+base_currency = st.text_input("Base Currency (e.g. INR)", "INR")
+target_currency = st.text_input("Target Currency (e.g. USD)", "USD")
+amount = st.number_input("Amount to Convert", min_value=0.0, value=10.0, step=1.0)
 
 if st.button("Convert"):
-    if base_currency == target_currency:
-        st.warning("Base and Target currencies cannot be the same.")
-    else:
-        with st.spinner("Thinking..."):
-            messages = [
-                HumanMessage(
-                    content=f"Please fetch the conversion rate between {base_currency} and {target_currency}, "
-                            f"and then convert {amount} {base_currency} to {target_currency}."
-                )
-            ]
-            conversion_rate = None
-            rate_note = ""
+    with st.spinner("Fetching conversion rate and calculating..."):
+        messages = [
+            HumanMessage(content=f"Please fetch the conversion rate between {base_currency} and {target_currency}, "
+                                 f"and then convert {amount} {base_currency} to {target_currency} using that rate.")
+        ]
 
-            while True:
-                ai_message = llm_with_tools.invoke(messages)
-                messages.append(ai_message)
+        conversion_rate = None
+        result = None
 
-                if ai_message.content.strip():
-                    st.success("✅ Conversion Complete")
-                    if rate_note:
-                        st.info(rate_note)
-                    st.markdown(f"**{ai_message.content}**")
-                    break
+        while True:
+            ai_message = llm_with_tools.invoke(messages)
+            messages.append(ai_message)
 
-                for tool_call in ai_message.tool_calls:
-                    if tool_call["name"] == "get_conversion_factor":
-                        tool_response = get_conversion_factor.invoke(tool_call["args"])
-                        conversion_rate = tool_response["conversion_rate"]
-                        rate_note = tool_response["note"]
-                        messages.append(
-                            ToolMessage(tool_call_id=tool_call["id"], content=json.dumps(tool_response))
-                        )
-                    elif tool_call["name"] == "converter":
-                        tool_args = dict(tool_call["args"])
-                        if "conversion_rate" not in tool_args and conversion_rate:
-                            tool_args["conversion_rate"] = conversion_rate
-                        tool_response = converter.invoke(tool_args)
-                        messages.append(
-                            ToolMessage(tool_call_id=tool_call["id"], content=json.dumps(tool_response))
-                        )
+            if ai_message.content.strip():
+                result = ai_message.content
+                break
+
+            for tool_call in ai_message.tool_calls:
+                if tool_call['name'] == 'get_conversion_factor':
+                    tool_response = get_conversion_factor.invoke(tool_call['args'])
+                    conversion_rate = tool_response['conversion_rate']
+                    messages.append(
+                        ToolMessage(tool_call_id=tool_call['id'], content=json.dumps(tool_response))
+                    )
+
+                elif tool_call['name'] == 'converter':
+                    tool_args = dict(tool_call['args'])
+                    if 'conversion_rate' not in tool_args and conversion_rate:
+                        tool_args['conversion_rate'] = conversion_rate
+                    tool_response = converter.invoke(tool_args)
+                    messages.append(
+                        ToolMessage(tool_call_id=tool_call['id'], content=json.dumps(tool_response))
+                    )
+
+        st.success("✅ Conversion Completed")
+        st.write(result)
