@@ -6,13 +6,12 @@ from langchain_core.tools import tool, InjectedToolArg
 from typing import Annotated
 import requests
 from dotenv import load_dotenv
+import os
 
 # Load environment variables
 load_dotenv()
 
 # --- Tools ---
-import os
-
 @tool
 def get_conversion_factor(base_currency: str, target_currency: str) -> float:
     """
@@ -75,10 +74,16 @@ if st.button("Convert"):
                 for tool_call in ai_message.tool_calls:
                     if tool_call["name"] == "get_conversion_factor":
                         tool_response = get_conversion_factor.invoke(tool_call["args"])
-                        conversion_rate = tool_response["conversion_rate"]
+                        conversion_rate = tool_response.get("conversion_rate")
+
+                        if not conversion_rate:
+                            st.error(f"❌ API Error: {tool_response}")
+                            break
+
                         messages.append(
                             ToolMessage(tool_call_id=tool_call["id"], content=json.dumps(tool_response))
                         )
+
                     elif tool_call["name"] == "converter":
                         tool_args = dict(tool_call["args"])
                         if "conversion_rate" not in tool_args and conversion_rate:
