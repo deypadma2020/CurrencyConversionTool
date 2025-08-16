@@ -13,14 +13,27 @@ load_dotenv()
 
 # --- Tools ---
 @tool
-def get_conversion_factor(base_currency: str, target_currency: str) -> float:
+def get_conversion_factor(base_currency: str, target_currency: str) -> dict:
     """
     Fetch the currency conversion factor between a base currency and a target currency.
+    Returns {"conversion_rate": float, "note": str}.
     """
     api_key = os.getenv("EXCHANGE_RATE_API_KEY")
     url = f"https://v6.exchangerate-api.com/v6/{api_key}/pair/{base_currency}/{target_currency}"
-    response = requests.get(url)
-    return response.json()
+    response = requests.get(url).json()
+
+    if response.get("result") != "success":
+        # fallback dummy rate
+        fallback_rate = 0.013 if base_currency == "INR" and target_currency == "USD" else 1.0
+        return {
+            "conversion_rate": fallback_rate,
+            "note": "Using fallback rate due to API error"
+        }
+
+    return {
+        "conversion_rate": response.get("conversion_rate", 1.0),
+        "note": "Live rate fetched successfully"
+    }
 
 @tool
 def converter(
@@ -57,10 +70,12 @@ if st.button("Convert"):
         with st.spinner("Thinking..."):
             messages = [
                 HumanMessage(
-                    content=f"Please fetch the conversion rate between {base_currency} and {target_currency}, and then convert {amount} {base_currency} to {target_currency}."
+                    content=f"Please fetch the conversion rate between {base_currency} and {target_currency}, "
+                            f"and then convert {amount} {base_currency} to {target_currency}."
                 )
             ]
             conversion_rate = None
+            rate_note = ""
 
             while True:
                 ai_message = llm_with_tools.invoke(messages)
@@ -68,22 +83,19 @@ if st.button("Convert"):
 
                 if ai_message.content.strip():
                     st.success("✅ Conversion Complete")
+                    if rate_note:
+                        st.info(rate_note)
                     st.markdown(f"**{ai_message.content}**")
                     break
 
                 for tool_call in ai_message.tool_calls:
                     if tool_call["name"] == "get_conversion_factor":
                         tool_response = get_conversion_factor.invoke(tool_call["args"])
-                        conversion_rate = tool_response.get("conversion_rate")
-
-                        if not conversion_rate:
-                            st.error(f"❌ API Error: {tool_response}")
-                            break
-
+                        conversion_rate = tool_response["conversion_rate"]
+                        rate_note = tool_response["note"]
                         messages.append(
                             ToolMessage(tool_call_id=tool_call["id"], content=json.dumps(tool_response))
                         )
-
                     elif tool_call["name"] == "converter":
                         tool_args = dict(tool_call["args"])
                         if "conversion_rate" not in tool_args and conversion_rate:
